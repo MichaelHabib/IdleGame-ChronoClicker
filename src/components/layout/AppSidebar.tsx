@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from 'next/link';
@@ -11,7 +12,7 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
   SidebarTrigger,
-} from '@/components/ui/sidebar'; // Assuming this path is correct for your sidebar component
+} from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Home, BarChart3, User, Backpack, Trophy, Settings, HelpCircle } from 'lucide-react';
@@ -45,14 +46,18 @@ export function AppSidebar() {
           <SidebarMenu>
             {navItems.map((item) => (
               <SidebarMenuItem key={item.href}>
-                <Link href={item.href} legacyBehavior passHref>
+                <Link href={item.href}>
                   <SidebarMenuButton
+                    asChild
                     isActive={pathname === item.href}
                     tooltip={{children: item.label, side: "right"}}
                     className="justify-start"
                   >
-                    <item.icon className="h-5 w-5" />
-                    <span className="group-data-[collapsible=icon]:hidden">{item.label}</span>
+                    {/* Wrap the icon and span in a single element */}
+                    <span>
+                      <item.icon className="h-5 w-5" />
+                      <span className="group-data-[collapsible=icon]:hidden">{item.label}</span>
+                    </span>
                   </SidebarMenuButton>
                 </Link>
               </SidebarMenuItem>
