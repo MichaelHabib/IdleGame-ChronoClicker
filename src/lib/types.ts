@@ -153,7 +153,4 @@ export interface GameState {
   };
   lastUpdate: number; // Timestamp of the last game loop tick
   totalClicks: number;
-  // For AI loot drop
-  generatorTotalPurchases: Record<string, number>; // Tracks total purchases for AI
-  lastLootCheckTimestamp: number; // Timestamp of the last AI loot check
 }
