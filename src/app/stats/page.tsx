@@ -7,6 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import * as LucideIcons from 'lucide-react';
 import { BarChart3, TrendingUp, Package } from 'lucide-react';
+import { initialAchievements } from '@/config/achievements';
+import { initialCharacters } from '@/config/characters';
 
 export default function StatsPage() {
   const { gameState, calculatePps } = useGame();
