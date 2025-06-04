@@ -148,39 +148,44 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
 
     // AI Loot Drop Logic
-    const character = getCharacter();
-    const lootDropInput: LootDropOrchestrationInput = {
-        generatorTotalPurchases: gameState.generatorTotalPurchases,
-        characterDropRateBoost: character ? character.baseDropRateMultiplier * gameState.permanentBoosts.globalDropRateMultiplier : 1 * gameState.permanentBoosts.globalDropRateMultiplier,
-        baseDropChance: 0.05, // Example: 5% base chance for AI to consider
-    };
+    // Use a snapshot of gameState for the AI call to avoid issues with stale closures
+    setGameState(async prevGameStateSnapshot => {
+      const character = initialCharacters[prevGameStateSnapshot.currentCharacterId!] || null;
+      const lootDropInput: Omit<LootDropOrchestrationInput, 'generatorTotalPurchasesString'> = {
+          generatorTotalPurchases: prevGameStateSnapshot.generatorTotalPurchases,
+          characterDropRateBoost: character ? character.baseDropRateMultiplier * prevGameStateSnapshot.permanentBoosts.globalDropRateMultiplier : 1 * prevGameStateSnapshot.permanentBoosts.globalDropRateMultiplier,
+          baseDropChance: 0.05, // Example: 5% base chance for AI to consider
+      };
 
-    try {
-        const lootResult = await orchestrateLootDrop(lootDropInput);
-        if (lootResult.shouldDrop) {
-            // Select a random item
-            const availableItems = Object.values(initialItems).filter(item => !item.id.startsWith("artifact_")); // Exclude specific artifacts from general pool
-            if (availableItems.length > 0) {
-                const randomItem = availableItems[Math.floor(Math.random() * availableItems.length)];
-                setGameState(prev => {
-                    const newState = { ...prev };
-                    const existingItem = newState.inventory.find(invItem => invItem.itemId === randomItem.id);
-                    if (existingItem) {
-                        existingItem.quantity += 1;
-                    } else {
-                        newState.inventory.push({ itemId: randomItem.id, quantity: 1 });
-                    }
-                    return newState;
-                });
-                toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
-            }
-        }
-    } catch (error) {
-        console.error("Error orchestrating loot drop:", error);
-        toast({ title: "Loot Drop Error", description: "Could not determine loot drop.", variant: "destructive" });
-    }
+      try {
+          const lootResult = await orchestrateLootDrop(lootDropInput);
+          if (lootResult.shouldDrop) {
+              // Select a random item
+              const availableItems = Object.values(initialItems).filter(item => !item.id.startsWith("artifact_")); // Exclude specific artifacts from general pool
+              if (availableItems.length > 0) {
+                  const randomItem = availableItems[Math.floor(Math.random() * availableItems.length)];
+                  // Update state based on the *latest* previous state, not the snapshot
+                  setGameState(prev => {
+                      const newState = { ...prev };
+                      const existingItem = newState.inventory.find(invItem => invItem.itemId === randomItem.id);
+                      if (existingItem) {
+                          existingItem.quantity += 1;
+                      } else {
+                          newState.inventory.push({ itemId: randomItem.id, quantity: 1 });
+                      }
+                      toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
+                      return newState;
+                  });
+              }
+          }
+      } catch (error) {
+          console.error("Error orchestrating loot drop:", error);
+          toast({ title: "Loot Drop Error", description: "Could not determine loot drop.", variant: "destructive" });
+      }
+      return prevGameStateSnapshot; // return the snapshot as it was before the async operation
+    });
 
-  }, [getCharacter, getItem, gameState.generatorTotalPurchases, gameState.permanentBoosts.globalDropRateMultiplier, toast]);
+  }, [getCharacter, getItem, toast]);
 
   const buyGenerator = useCallback((generatorId: string) => {
     setGameState(prev => {
@@ -499,3 +504,4 @@ export const useGame = (): GameContextType => {
   }
   return context;
 };
+

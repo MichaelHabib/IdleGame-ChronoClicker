@@ -16,6 +16,9 @@ const LootDropOrchestrationInputSchema = z.object({
   generatorTotalPurchases: z
     .record(z.number())
     .describe('A map of generator IDs to the total number of purchases for each generator.'),
+  generatorTotalPurchasesString: z
+    .string()
+    .describe('A JSON string representation of generator total purchases.'),
   characterDropRateBoost: z
     .number()
     .describe('The drop rate boost provided by the current character.'),
@@ -30,9 +33,13 @@ const LootDropOrchestrationOutputSchema = z.object({
 export type LootDropOrchestrationOutput = z.infer<typeof LootDropOrchestrationOutputSchema>;
 
 export async function orchestrateLootDrop(
-  input: LootDropOrchestrationInput
+  input: Omit<LootDropOrchestrationInput, 'generatorTotalPurchasesString'>
 ): Promise<LootDropOrchestrationOutput> {
-  return orchestrateLootDropFlow(input);
+  const flowInput: LootDropOrchestrationInput = {
+    ...input,
+    generatorTotalPurchasesString: JSON.stringify(input.generatorTotalPurchases),
+  };
+  return orchestrateLootDropFlow(flowInput);
 }
 
 const orchestrateLootDropPrompt = ai.definePrompt({
@@ -51,7 +58,7 @@ const orchestrateLootDropPrompt = ai.definePrompt({
   - Character bonuses: Factor in the character's drop rate boost.
 
   Here is the current game state:
-  - Generator Total Purchases: {{{JSON.stringify generatorTotalPurchases}}}
+  - Generator Total Purchases: {{{generatorTotalPurchasesString}}}
   - Character Drop Rate Boost: {{{characterDropRateBoost}}}
   - Base Drop Chance: {{{baseDropChance}}}
 
@@ -67,8 +74,9 @@ const orchestrateLootDropFlow = ai.defineFlow(
     inputSchema: LootDropOrchestrationInputSchema,
     outputSchema: LootDropOrchestrationOutputSchema,
   },
-  async input => {
-    const {output} = await orchestrateLootDropPrompt(input);
+  async (inputWithStr: LootDropOrchestrationInput) => {
+    const {output} = await orchestrateLootDropPrompt(inputWithStr);
     return output!;
   }
 );
+
