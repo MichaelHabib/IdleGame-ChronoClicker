@@ -126,66 +126,75 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 
   const performClick = useCallback(async (resourceId: string = 'points') => {
+    // Part 1: Synchronous click effects
     setGameState(prev => {
       const newState = { ...prev };
       let clickPower = 1; // Base click power
-      const character = getCharacter();
-      if(character) {
-        // Apply character click bonus if any (not defined in types yet, add if needed)
-      }
-      // Apply item click bonuses
+      const character = prev.currentCharacterId ? initialCharacters[prev.currentCharacterId] : null;
+
+      // Apply item click bonuses from PREVIOUS state's equipped items
       Object.values(prev.equippedItems).forEach(itemId => {
-        if(itemId) {
-          const item = getItem(itemId);
-          if (item && item.stats.clickPowerBoost) clickPower += item.stats.clickPowerBoost;
-          if (item && item.stats.clickPowerMultiplier) clickPower *= (1 + item.stats.clickPowerMultiplier);
+        if (itemId) {
+          const itemDetails = initialItems[itemId]; // Direct lookup
+          if (itemDetails && itemDetails.stats.clickPowerBoost) clickPower += itemDetails.stats.clickPowerBoost;
+          if (itemDetails && itemDetails.stats.clickPowerMultiplier) clickPower *= (1 + itemDetails.stats.clickPowerMultiplier);
         }
       });
 
-      newState.resources[resourceId].amount += clickPower;
+      if (newState.resources[resourceId]) {
+        newState.resources[resourceId].amount += clickPower;
+      }
       newState.totalClicks += 1;
       return newState;
     });
 
-    // AI Loot Drop Logic
-    // Use a snapshot of gameState for the AI call to avoid issues with stale closures
-    setGameState(async prevGameStateSnapshot => {
-      const character = initialCharacters[prevGameStateSnapshot.currentCharacterId!] || null;
-      const lootDropInput: Omit<LootDropOrchestrationInput, 'generatorTotalPurchasesString'> = {
-          generatorTotalPurchases: prevGameStateSnapshot.generatorTotalPurchases,
-          characterDropRateBoost: character ? character.baseDropRateMultiplier * prevGameStateSnapshot.permanentBoosts.globalDropRateMultiplier : 1 * prevGameStateSnapshot.permanentBoosts.globalDropRateMultiplier,
-          baseDropChance: 0.05, // Example: 5% base chance for AI to consider
-      };
+    // Part 2: Asynchronous AI Loot Drop Logic
+    // Capture necessary data from gameState *before* await.
+    // This `gameState` is the one from the render cycle when `performClick` was created/memoized.
+    const currentTotalPurchases = gameState.generatorTotalPurchases;
+    const currentCharIdForAI = gameState.currentCharacterId;
+    const currentGlobalDropRateMultiplier = gameState.permanentBoosts.globalDropRateMultiplier;
+    
+    const characterForAI = currentCharIdForAI ? initialCharacters[currentCharIdForAI] : null;
+    const lootDropInput: Omit<LootDropOrchestrationInput, 'generatorTotalPurchasesString'> = {
+      generatorTotalPurchases: currentTotalPurchases,
+      characterDropRateBoost: characterForAI
+        ? characterForAI.baseDropRateMultiplier * currentGlobalDropRateMultiplier
+        : 1 * currentGlobalDropRateMultiplier,
+      baseDropChance: 0.05,
+    };
 
-      try {
-          const lootResult = await orchestrateLootDrop(lootDropInput);
-          if (lootResult.shouldDrop) {
-              // Select a random item
-              const availableItems = Object.values(initialItems).filter(item => !item.id.startsWith("artifact_")); // Exclude specific artifacts from general pool
-              if (availableItems.length > 0) {
-                  const randomItem = availableItems[Math.floor(Math.random() * availableItems.length)];
-                  // Update state based on the *latest* previous state, not the snapshot
-                  setGameState(prev => {
-                      const newState = { ...prev };
-                      const existingItem = newState.inventory.find(invItem => invItem.itemId === randomItem.id);
-                      if (existingItem) {
-                          existingItem.quantity += 1;
-                      } else {
-                          newState.inventory.push({ itemId: randomItem.id, quantity: 1 });
-                      }
-                      toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
-                      return newState;
-                  });
-              }
-          }
-      } catch (error) {
-          console.error("Error orchestrating loot drop:", error);
-          toast({ title: "Loot Drop Error", description: "Could not determine loot drop.", variant: "destructive" });
+    try {
+      const lootResult = await orchestrateLootDrop(lootDropInput); // Async operation
+
+      if (lootResult.shouldDrop) {
+        const availableItems = Object.values(initialItems).filter(item => !item.id.startsWith("artifact_"));
+        if (availableItems.length > 0) {
+          const randomItem = availableItems[Math.floor(Math.random() * availableItems.length)];
+          // Now, update state based on the AI result
+          setGameState(prev => {
+            const newState = { ...prev };
+            const existingItem = newState.inventory.find(invItem => invItem.itemId === randomItem.id);
+            if (existingItem) {
+              existingItem.quantity += 1;
+            } else {
+              newState.inventory.push({ itemId: randomItem.id, quantity: 1 });
+            }
+            toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
+            return newState;
+          });
+        }
       }
-      return prevGameStateSnapshot; // return the snapshot as it was before the async operation
-    });
-
-  }, [getCharacter, getItem, toast]);
+    } catch (error) {
+      console.error("Error orchestrating loot drop:", error);
+      toast({ title: "Loot Drop Error", description: "Could not determine loot drop.", variant: "destructive" });
+    }
+  }, [
+    gameState.generatorTotalPurchases, 
+    gameState.currentCharacterId, 
+    gameState.permanentBoosts.globalDropRateMultiplier, 
+    toast
+  ]);
 
   const buyGenerator = useCallback((generatorId: string) => {
     setGameState(prev => {
@@ -331,10 +340,15 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       }
       
-      itemInInventory.quantity -= quantity;
-      if (itemInInventory.quantity <= 0) {
-        newState.inventory = newState.inventory.filter(invItem => invItem.itemId !== itemId);
+      // Ensure itemInInventory is referenced from newState if consumeEffect modified inventory
+      const currentItemInInventory = newState.inventory.find(invItem => invItem.itemId === itemId);
+      if (currentItemInInventory) {
+        currentItemInInventory.quantity -= quantity;
+        if (currentItemInInventory.quantity <= 0) {
+          newState.inventory = newState.inventory.filter(invItem => invItem.itemId !== itemId);
+        }
       }
+
       toast({ title: "Item Consumed", description: `${itemToConsume.name} consumed.` });
       return newState;
     });
@@ -463,7 +477,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const resetGame = useCallback(() => {
     if(window.confirm("Are you sure you want to reset your game? All progress will be lost.")) {
-      setGameState(defaultGameState); // Or a new deep copy of defaultGameState
+      setGameState(JSON.parse(JSON.stringify(defaultGameState))); // Reset with a deep copy of default
       localStorage.removeItem('chronoClickerSave');
       toast({ title: "Game Reset", description: "Your progress has been reset." });
     }
@@ -475,9 +489,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only on mount
 
-  // Auto-save periodically (e.g., every 30 seconds) and on significant changes
-  // This simple version saves on every gameState change, which might be too frequent.
-  // Debouncing or saving on specific actions might be better for performance.
+  // Auto-save periodically
   useEffect(() => {
     const autoSaveTimeout = setTimeout(() => {
         saveGame();
