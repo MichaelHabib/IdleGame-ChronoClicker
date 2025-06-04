@@ -1,3 +1,4 @@
+
 // Core Resources
 export interface Resource {
   id: string;
@@ -154,4 +155,5 @@ export interface GameState {
   totalClicks: number;
   // For AI loot drop
   generatorTotalPurchases: Record<string, number>; // Tracks total purchases for AI
+  lastLootCheckTimestamp: number; // Timestamp of the last AI loot check
 }

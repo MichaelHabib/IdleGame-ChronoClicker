@@ -33,6 +33,7 @@ const defaultGameState: GameState = {
   lastUpdate: Date.now(),
   totalClicks: 0,
   generatorTotalPurchases: Object.keys(initialGenerators).reduce((acc, key) => ({...acc, [key]: 0}), {}),
+  lastLootCheckTimestamp: 0, // Initialize timestamp for AI loot check
 };
 
 interface GameContextType {
@@ -57,19 +58,22 @@ interface GameContextType {
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
+const AI_LOOT_CHECK_COOLDOWN_MS = 15000; // 15 seconds cooldown for AI loot checks
+
 export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [gameState, setGameState] = useState<GameState>(() => {
-     // Load game state from localStorage on initial load
     const savedGame = typeof window !== 'undefined' ? localStorage.getItem('chronoClickerSave') : null;
     if (savedGame) {
       try {
-        return JSON.parse(savedGame) as GameState;
+        const loadedState = JSON.parse(savedGame) as GameState;
+        // Ensure new fields like lastLootCheckTimestamp have default values if loading old save
+        return { ...JSON.parse(JSON.stringify(defaultGameState)), ...loadedState };
       } catch (error) {
         console.error("Failed to parse saved game data:", error);
-        return JSON.parse(JSON.stringify(defaultGameState)); // Fallback to default if parsing fails
+        return JSON.parse(JSON.stringify(defaultGameState));
       }
     }
-    return JSON.parse(JSON.stringify(defaultGameState)); // Deep copy
+    return JSON.parse(JSON.stringify(defaultGameState));
   });
   const { toast } = useToast();
 
@@ -97,7 +101,6 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     totalPps *= gameState.permanentBoosts.globalPpsMultiplier;
 
-    // Apply item boosts
     Object.values(gameState.equippedItems).forEach(itemId => {
       if (itemId) {
         const item = getItem(itemId);
@@ -113,19 +116,17 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return totalPps;
   }, [gameState.generators, gameState.equippedItems, gameState.permanentBoosts.globalPpsMultiplier, getCharacter, getItem]);
 
-  // Game Loop
   useEffect(() => {
     const gameTick = () => {
       setGameState(prev => {
         const newState = { ...prev };
-        // Deep copy resources to ensure mutations are safe
         newState.resources = JSON.parse(JSON.stringify(prev.resources));
         const now = Date.now();
-        const delta = (now - newState.lastUpdate) / 1000; // seconds
+        const delta = (now - newState.lastUpdate) / 1000; 
 
         Object.keys(newState.resources).forEach(resId => {
           const pps = calculatePps(resId);
-          newState.resources[resId].perSecond = pps; // Update displayed PPS
+          newState.resources[resId].perSecond = pps;
           newState.resources[resId].amount += pps * delta;
         });
         
@@ -140,10 +141,15 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 
   const performClick = useCallback(async (resourceId: string = 'points') => {
-    // Part 1: Synchronous click effects
+    const now = Date.now();
+    // Determine if AI check should be performed based on cooldown
+    const shouldPerformAiCheck = now - (gameState.lastLootCheckTimestamp || 0) > AI_LOOT_CHECK_COOLDOWN_MS;
+
+    // Perform synchronous click effects and update timestamp if AI check is due
     setGameState(prev => {
       const newState = { ...prev };
-      newState.resources = JSON.parse(JSON.stringify(prev.resources)); // Deep copy for modification
+      // Deep copy resources for modification
+      newState.resources = JSON.parse(JSON.stringify(prev.resources));
       newState.totalClicks = prev.totalClicks + 1;
 
       let clickPower = 1; // Base click power
@@ -160,55 +166,59 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } else {
         console.warn(`Resource ID "${resourceId}" not found in performClick.`);
       }
+
+      if (shouldPerformAiCheck) {
+        newState.lastLootCheckTimestamp = now; // Update timestamp
+      }
       return newState;
     });
 
-    // Part 2: Asynchronous AI Loot Drop Logic - ensure gameState used here is the latest committed state
-    const currentGameState = gameState; // Capture current state for async operation
-    const lootDropInput: Omit<LootDropOrchestrationInput, 'generatorTotalPurchasesString'> = {
-      generatorTotalPurchases: currentGameState.generatorTotalPurchases,
-      characterDropRateBoost: (currentGameState.currentCharacterId ? initialCharacters[currentGameState.currentCharacterId]?.baseDropRateMultiplier : 1) * currentGameState.permanentBoosts.globalDropRateMultiplier,
-      baseDropChance: 0.05, // Example base chance
-    };
+    // Asynchronous AI Loot Drop Logic, only if cooldown has passed
+    if (shouldPerformAiCheck) {
+      // Use gameState from the useCallback closure for AI input.
+      // This state is from when performClick was defined/memoized.
+      const lootDropInput: Omit<LootDropOrchestrationInput, 'generatorTotalPurchasesString'> = {
+        generatorTotalPurchases: gameState.generatorTotalPurchases,
+        characterDropRateBoost: (gameState.currentCharacterId ? initialCharacters[gameState.currentCharacterId]?.baseDropRateMultiplier : 1) * gameState.permanentBoosts.globalDropRateMultiplier,
+        baseDropChance: 0.05, // Example base chance
+      };
 
-    try {
-      const lootResult = await orchestrateLootDrop(lootDropInput);
+      try {
+        const lootResult = await orchestrateLootDrop(lootDropInput);
 
-      if (lootResult.shouldDrop) {
-        const availableItems = Object.values(initialItems).filter(item => !item.id.startsWith("artifact_"));
-        if (availableItems.length > 0) {
-          const randomItem = availableItems[Math.floor(Math.random() * availableItems.length)];
-          
-          setGameState(prev => {
-            const newState = { ...prev };
-            newState.inventory = [...prev.inventory]; // Create new array for inventory
-            const existingItemIndex = newState.inventory.findIndex(invItem => invItem.itemId === randomItem.id);
-            if (existingItemIndex > -1) {
-              newState.inventory[existingItemIndex] = {
-                ...newState.inventory[existingItemIndex],
-                quantity: newState.inventory[existingItemIndex].quantity + 1,
-              };
-            } else {
-              newState.inventory.push({ itemId: randomItem.id, quantity: 1 });
-            }
-            return newState;
-          });
-          setTimeout(() => {
-            toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
-          }, 0);
+        if (lootResult.shouldDrop) {
+          const availableItems = Object.values(initialItems).filter(item => !item.id.startsWith("artifact_"));
+          if (availableItems.length > 0) {
+            const randomItem = availableItems[Math.floor(Math.random() * availableItems.length)];
+            
+            setGameState(prev => { // State update for adding loot
+              const newState = { ...prev };
+              newState.inventory = [...prev.inventory]; // Create new array for inventory
+              const existingItemIndex = newState.inventory.findIndex(invItem => invItem.itemId === randomItem.id);
+              if (existingItemIndex > -1) {
+                newState.inventory[existingItemIndex] = {
+                  ...newState.inventory[existingItemIndex],
+                  quantity: newState.inventory[existingItemIndex].quantity + 1,
+                };
+              } else {
+                newState.inventory.push({ itemId: randomItem.id, quantity: 1 });
+              }
+              return newState;
+            });
+            setTimeout(() => {
+              toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
+            }, 0);
+          }
         }
+      } catch (error) {
+        console.error("Error orchestrating loot drop:", error);
+        setTimeout(() => {
+          toast({ title: "Loot Drop Error", description: "Could not determine loot drop. May be API rate limit.", variant: "destructive" });
+        }, 0);
       }
-    } catch (error) {
-      console.error("Error orchestrating loot drop:", error);
-      setTimeout(() => {
-        toast({ title: "Loot Drop Error", description: "Could not determine loot drop.", variant: "destructive" });
-      }, 0);
     }
-  }, [
-    gameState, // Dependency on the whole gameState to ensure fresh data for AI call
-    toast, 
-    getItem
-  ]);
+  }, [gameState, toast, getItem]);
+
 
   const buyGenerator = useCallback((generatorId: string) => {
     setGameState(prev => {
@@ -222,8 +232,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       let numToBuy = 0;
       let currentCalcCost = generator.baseCost * Math.pow(generator.costScale, generator.quantity);
 
-      if (currentMultiplier === Number.MAX_SAFE_INTEGER) { // Buy MAX
-          while(costResource.amount >= totalCost + currentCalcCost && numToBuy < 1000000) { // Cap MAX buy to 1M for performance
+      if (currentMultiplier === Number.MAX_SAFE_INTEGER) {
+          while(costResource.amount >= totalCost + currentCalcCost && numToBuy < 1000000) { 
               totalCost += currentCalcCost;
               numToBuy++;
               currentCalcCost = generator.baseCost * Math.pow(generator.costScale, generator.quantity + numToBuy);
@@ -248,11 +258,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       const newState = { ...prev };
-      // Ensure deep copies for objects that will be modified
       newState.resources = JSON.parse(JSON.stringify(prev.resources));
       newState.generators = JSON.parse(JSON.stringify(prev.generators));
       newState.generatorTotalPurchases = JSON.parse(JSON.stringify(prev.generatorTotalPurchases));
-      newState.inventory = [...prev.inventory]; // Shallow copy for inventory array, then manage items immutably
+      newState.inventory = [...prev.inventory];
 
       newState.resources[generator.costResource].amount -= totalCost;
       newState.generators[generatorId].quantity += numToBuy;
@@ -263,10 +272,9 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (generator.artifactDropRateFormula && generator.artifactIds && generator.artifactIds.length > 0) {
         try {
           const quantity = newState.generators[generatorId].quantity;
-          // Replace 'log' with 'Math.log' and 'quantity' with its value for eval
           const formulaString = generator.artifactDropRateFormula
-            .replace(/\blog\b/g, "Math.log") // Use word boundary for log
-            .replace(/\bquantity\b/g, String(quantity)); // Use word boundary for quantity
+            .replace(/\blog\b/g, "Math.log")
+            .replace(/\bquantity\b/g, String(quantity));
           
           const dropRate = eval(formulaString);
 
@@ -295,7 +303,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, 0);
       return newState;
     });
-  }, [toast, getItem]);
+  }, [toast, getItem, gameState.settings.currentMultiplier]); // Added gameState.settings.currentMultiplier
 
   const equipItem = useCallback((itemId: string, slot: CharacterSlotType) => {
     setGameState(prev => {
@@ -309,9 +317,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       const currentEquippedId = prev.equippedItems[slot];
       const newState = { ...prev };
-      newState.equippedItems = {...prev.equippedItems, [slot]: itemId }; // Create new object for equippedItems
-      newState.inventory = [...prev.inventory]; // Create new array for inventory
-
+      newState.equippedItems = {...prev.equippedItems, [slot]: itemId }; 
+      newState.inventory = [...prev.inventory]; 
 
       const itemInInventoryIndex = newState.inventory.findIndex(invItem => invItem.itemId === itemId);
       if (itemInInventoryIndex > -1) {
@@ -345,8 +352,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       const item = getItem(itemIdToUnequip);
       const newState = { ...prev };
-      newState.equippedItems = {...prev.equippedItems, [slot]: null}; // Create new object
-      newState.inventory = [...prev.inventory]; // Create new array
+      newState.equippedItems = {...prev.equippedItems, [slot]: null};
+      newState.inventory = [...prev.inventory];
 
       const existingItemIndex = newState.inventory.findIndex(invItem => invItem.itemId === itemIdToUnequip);
       if (existingItemIndex > -1) {
@@ -373,33 +380,34 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return prev;
       }
       
-      let newState = { ...prev }; 
-      newState.resources = JSON.parse(JSON.stringify(prev.resources));
-      newState.inventory = JSON.parse(JSON.stringify(prev.inventory));
+      let tempState = { ...prev }; 
+      tempState.resources = JSON.parse(JSON.stringify(prev.resources));
+      // IMPORTANT: Operate on a true deep copy of inventory if consumeEffect can modify it extensively.
+      // If consumeEffect only adds to resources, current approach is fine. If it adds/removes items, need deep copy.
+      // For now, assuming consumeEffect primarily modifies resources or simple boosts.
+      tempState.inventory = tempState.inventory.map(i => ({...i}));
 
 
       for(let i=0; i < quantity; i++){
         if (itemToConsume.consumeEffect) {
-            newState = itemToConsume.consumeEffect(newState); 
+            tempState = itemToConsume.consumeEffect(tempState); 
         }
       }
       
-      // Need to find index again as consumeEffect might have modified inventory array
-      const currentItemInInventoryIndex = newState.inventory.findIndex(invItem => invItem.itemId === itemId);
-      if (currentItemInInventoryIndex > -1 && newState.inventory[currentItemInInventoryIndex].quantity >= quantity) {
-        newState.inventory[currentItemInInventoryIndex].quantity -= quantity;
-        if (newState.inventory[currentItemInInventoryIndex].quantity <= 0) {
-          newState.inventory.splice(currentItemInInventoryIndex, 1);
+      const currentItemInInventoryIndex = tempState.inventory.findIndex(invItem => invItem.itemId === itemId);
+      if (currentItemInInventoryIndex > -1 && tempState.inventory[currentItemInInventoryIndex].quantity >= quantity) {
+        tempState.inventory[currentItemInInventoryIndex].quantity -= quantity;
+        if (tempState.inventory[currentItemInInventoryIndex].quantity <= 0) {
+          tempState.inventory.splice(currentItemInInventoryIndex, 1);
         }
       } else {
-        // This case implies consumeEffect might have already removed it, or quantity issue
-        console.warn(`Item ${itemId} not found or insufficient quantity after consumeEffect.`);
+        console.warn(`Item ${itemId} not found or insufficient quantity after consumeEffect. Possible if effect removes item.`);
       }
       
       setTimeout(() => {
         toast({ title: "Item Consumed", description: `${itemToConsume.name} consumed.` });
       }, 0);
-      return newState;
+      return tempState; // Return the modified tempState
     });
   }, [getItem, toast]);
 
@@ -482,7 +490,9 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             });
             Object.entries(accumulatedRewards.permanentBoosts).forEach(([stat, value]) => {
                  if (stat === 'globalPpsMultiplier' || stat === 'globalDropRateMultiplier') {
-                    newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 1.0) + value; // Ensure base is 1 if adding percentage
+                    // Ensure base is 1 if adding percentage, but these are multipliers so they should add up.
+                    // If reward 'value' is 0.01 for 1%, then (1 + 0) + 0.01 = 1.01. (1+0.05) + 0.01 = 1.06
+                    newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 1.0) + value; 
                  } else {
                     newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 0) + value;
                  }
@@ -492,13 +502,11 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         achievementToastMessages.forEach(msg => setTimeout(() => toast(msg), 0));
     }
-  }, [gameState, toast]);
+  }, [gameState, toast]); // gameState as dependency
 
   const saveGame = useCallback(() => {
     try {
       localStorage.setItem('chronoClickerSave', JSON.stringify(gameState));
-      // console.log("Game Saved at " + new Date().toLocaleTimeString()); // Optional: remove for production
-      // Toasts for manual save are in SettingsPage, this is for auto-save primarily
     } catch (error) {
       console.error("Failed to save game:", error);
       setTimeout(() => toast({ title: "Auto-Save Failed", variant: "destructive" }), 0);
@@ -510,7 +518,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const savedGame = localStorage.getItem('chronoClickerSave');
       if (savedGame) {
         const loadedState = JSON.parse(savedGame) as GameState;
-        setGameState(loadedState);
+        setGameState({ ...JSON.parse(JSON.stringify(defaultGameState)), ...loadedState });
         setTimeout(() => toast({ title: "Game Loaded!" }), 0);
         return true;
       }
@@ -543,9 +551,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const importSave = useCallback((jsonData: string): boolean => {
     try {
       const importedState = JSON.parse(jsonData) as GameState;
-      // Basic validation
       if (importedState && typeof importedState.resources === 'object' && typeof importedState.generators === 'object') {
-        setGameState(importedState);
+        setGameState({ ...JSON.parse(JSON.stringify(defaultGameState)), ...importedState });
         setTimeout(() => toast({ title: "Save Imported Successfully!" }), 0);
         return true;
       } else {
@@ -567,16 +574,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [toast]);
   
-  // Auto-load on mount is handled by useState initial value now.
-  // No explicit loadGame() call needed in useEffect for initial load.
-
-  // Auto-save periodically
   useEffect(() => {
-    const autoSaveInterval = setInterval(() => {
-        saveGame();
-    }, 30000); // Auto-save every 30 seconds
+    const autoSaveInterval = setInterval(saveGame, 30000);
     return () => clearInterval(autoSaveInterval);
-  }, [saveGame]); // saveGame dependency is stable due to useCallback with gameState
+  }, [saveGame]);
 
   return (
     <GameContext.Provider value={{ 
@@ -596,4 +597,3 @@ export const useGame = (): GameContextType => {
   }
   return context;
 };
-
