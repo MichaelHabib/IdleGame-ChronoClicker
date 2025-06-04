@@ -132,10 +132,9 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       let clickPower = 1; // Base click power
       const character = prev.currentCharacterId ? initialCharacters[prev.currentCharacterId] : null;
 
-      // Apply item click bonuses from PREVIOUS state's equipped items
       Object.values(prev.equippedItems).forEach(itemId => {
         if (itemId) {
-          const itemDetails = initialItems[itemId]; // Direct lookup
+          const itemDetails = initialItems[itemId];
           if (itemDetails && itemDetails.stats.clickPowerBoost) clickPower += itemDetails.stats.clickPowerBoost;
           if (itemDetails && itemDetails.stats.clickPowerMultiplier) clickPower *= (1 + itemDetails.stats.clickPowerMultiplier);
         }
@@ -143,14 +142,14 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       if (newState.resources[resourceId]) {
         newState.resources[resourceId].amount += clickPower;
+      } else {
+        console.warn(`Resource ID "${resourceId}" not found in performClick.`);
       }
       newState.totalClicks += 1;
       return newState;
     });
 
     // Part 2: Asynchronous AI Loot Drop Logic
-    // Capture necessary data from gameState *before* await.
-    // This `gameState` is the one from the render cycle when `performClick` was created/memoized.
     const currentTotalPurchases = gameState.generatorTotalPurchases;
     const currentCharIdForAI = gameState.currentCharacterId;
     const currentGlobalDropRateMultiplier = gameState.permanentBoosts.globalDropRateMultiplier;
@@ -161,33 +160,41 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       characterDropRateBoost: characterForAI
         ? characterForAI.baseDropRateMultiplier * currentGlobalDropRateMultiplier
         : 1 * currentGlobalDropRateMultiplier,
-      baseDropChance: 0.05,
+      baseDropChance: 0.05, // Example base chance
     };
 
     try {
-      const lootResult = await orchestrateLootDrop(lootDropInput); // Async operation
+      const lootResult = await orchestrateLootDrop(lootDropInput);
 
       if (lootResult.shouldDrop) {
         const availableItems = Object.values(initialItems).filter(item => !item.id.startsWith("artifact_"));
         if (availableItems.length > 0) {
           const randomItem = availableItems[Math.floor(Math.random() * availableItems.length)];
-          // Now, update state based on the AI result
+          
           setGameState(prev => {
             const newState = { ...prev };
-            const existingItem = newState.inventory.find(invItem => invItem.itemId === randomItem.id);
-            if (existingItem) {
-              existingItem.quantity += 1;
+            newState.inventory = [...newState.inventory]; // Ensure new array for inventory
+            const existingItemIndex = newState.inventory.findIndex(invItem => invItem.itemId === randomItem.id);
+            if (existingItemIndex > -1) {
+              newState.inventory[existingItemIndex] = {
+                ...newState.inventory[existingItemIndex],
+                quantity: newState.inventory[existingItemIndex].quantity + 1,
+              };
             } else {
               newState.inventory.push({ itemId: randomItem.id, quantity: 1 });
             }
-            toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
             return newState;
           });
+          setTimeout(() => {
+            toast({ title: "Loot Drop!", description: `Found: ${randomItem.name}. AI Reason: ${lootResult.reason}` });
+          }, 0);
         }
       }
     } catch (error) {
       console.error("Error orchestrating loot drop:", error);
-      toast({ title: "Loot Drop Error", description: "Could not determine loot drop.", variant: "destructive" });
+      setTimeout(() => {
+        toast({ title: "Loot Drop Error", description: "Could not determine loot drop.", variant: "destructive" });
+      }, 0);
     }
   }, [
     gameState.generatorTotalPurchases, 
@@ -227,39 +234,50 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       if (numToBuy === 0) {
-        toast({ title: "Not enough resources", description: `You need more ${costResource.name} to buy ${generator.name}.`, variant: "destructive" });
+        setTimeout(() => {
+          toast({ title: "Not enough resources", description: `You need more ${costResource.name} to buy ${generator.name}.`, variant: "destructive" });
+        }, 0);
         return prev;
       }
 
       const newState = { ...prev };
-      newState.resources[generator.costResource].amount -= totalCost;
-      newState.generators[generatorId].quantity += numToBuy;
-      newState.generatorTotalPurchases[generatorId] = (newState.generatorTotalPurchases[generatorId] || 0) + numToBuy;
+      newState.resources = {...newState.resources, [generator.costResource]: {...newState.resources[generator.costResource], amount: newState.resources[generator.costResource].amount - totalCost}};
+      newState.generators = {...newState.generators, [generatorId]: {...newState.generators[generatorId], quantity: newState.generators[generatorId].quantity + numToBuy}};
+      newState.generatorTotalPurchases = {...newState.generatorTotalPurchases, [generatorId]: (newState.generatorTotalPurchases[generatorId] || 0) + numToBuy};
+      
 
       // Artifact drop check for this generator
+      let artifactDropped = false;
+      let droppedArtifactName = '';
       if (generator.artifactDropRateFormula && generator.artifactIds && generator.artifactIds.length > 0) {
         try {
           const quantity = newState.generators[generatorId].quantity;
           // Sanitize and evaluate formula carefully: this is a simplified example
-          // In a real app, use a proper math expression parser
           const dropRate = eval(generator.artifactDropRateFormula.replace("quantity", String(quantity)));
           if (Math.random() < dropRate) {
             const artifactId = generator.artifactIds[Math.floor(Math.random() * generator.artifactIds.length)];
-            const existingArtifact = newState.inventory.find(invItem => invItem.itemId === artifactId);
-            if (existingArtifact) {
-                existingArtifact.quantity += 1;
+            newState.inventory = [...newState.inventory];
+            const existingArtifactIndex = newState.inventory.findIndex(invItem => invItem.itemId === artifactId);
+            if (existingArtifactIndex > -1) {
+                 newState.inventory[existingArtifactIndex] = {...newState.inventory[existingArtifactIndex], quantity: newState.inventory[existingArtifactIndex].quantity + 1};
             } else {
                 newState.inventory.push({ itemId: artifactId, quantity: 1 });
             }
             const artifact = getItem(artifactId);
-            toast({ title: "Artifact Found!", description: `Your ${generator.name} uncovered a ${artifact?.name || 'rare artifact'}!` });
+            droppedArtifactName = artifact?.name || 'rare artifact';
+            artifactDropped = true;
           }
         } catch (e) {
           console.error("Error evaluating artifact drop rate formula:", e);
         }
       }
       
-      toast({ title: "Generator Purchased!", description: `Bought ${numToBuy} x ${generator.name}` });
+      setTimeout(() => {
+        toast({ title: "Generator Purchased!", description: `Bought ${numToBuy} x ${generator.name}` });
+        if (artifactDropped) {
+            toast({ title: "Artifact Found!", description: `Your ${generator.name} uncovered a ${droppedArtifactName}!` });
+        }
+      }, 0);
       return newState;
     });
   }, [toast, getItem]);
@@ -267,37 +285,40 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const equipItem = useCallback((itemId: string, slot: CharacterSlotType) => {
     setGameState(prev => {
       const itemToEquip = getItem(itemId);
-      if (!itemToEquip || !itemToEquip.equippable || itemToEquip.slot !== slot) { // Basic slot check, can be more complex
-        toast({ title: "Cannot Equip", description: "Item cannot be equipped in this slot.", variant: "destructive"});
+      if (!itemToEquip || !itemToEquip.equippable || itemToEquip.slot !== slot) {
+        setTimeout(() => {
+          toast({ title: "Cannot Equip", description: "Item cannot be equipped in this slot.", variant: "destructive"});
+        }, 0);
         return prev;
       }
       
       const currentEquippedId = prev.equippedItems[slot];
       const newState = { ...prev };
-      newState.equippedItems[slot] = itemId; // Equip new item
+      newState.equippedItems = {...newState.equippedItems, [slot]: itemId };
+      newState.inventory = [...newState.inventory];
 
-      // Remove equipped item from inventory
-      const itemInInventory = newState.inventory.find(invItem => invItem.itemId === itemId);
-      if (itemInInventory) {
-        itemInInventory.quantity -= 1;
-        if (itemInInventory.quantity <= 0) {
-          newState.inventory = newState.inventory.filter(invItem => invItem.itemId !== itemId);
+
+      const itemInInventoryIndex = newState.inventory.findIndex(invItem => invItem.itemId === itemId);
+      if (itemInInventoryIndex > -1) {
+        newState.inventory[itemInInventoryIndex] = {...newState.inventory[itemInInventoryIndex], quantity: newState.inventory[itemInInventoryIndex].quantity - 1};
+        if (newState.inventory[itemInInventoryIndex].quantity <= 0) {
+          newState.inventory.splice(itemInInventoryIndex, 1);
         }
       } else {
-         // This case should ideally not happen if UI is correct (item must be in inventory to equip)
          console.warn("Equipped item not found in inventory quantity check");
       }
       
-      // Add previously equipped item back to inventory
       if (currentEquippedId) {
-        const existingOldItem = newState.inventory.find(invItem => invItem.itemId === currentEquippedId);
-        if (existingOldItem) {
-          existingOldItem.quantity += 1;
+        const existingOldItemIndex = newState.inventory.findIndex(invItem => invItem.itemId === currentEquippedId);
+        if (existingOldItemIndex > -1) {
+          newState.inventory[existingOldItemIndex] = {...newState.inventory[existingOldItemIndex], quantity: newState.inventory[existingOldItemIndex].quantity + 1};
         } else {
           newState.inventory.push({ itemId: currentEquippedId, quantity: 1 });
         }
       }
-      toast({ title: "Item Equipped", description: `${itemToEquip.name} equipped.` });
+      setTimeout(() => {
+        toast({ title: "Item Equipped", description: `${itemToEquip.name} equipped.` });
+      }, 0);
       return newState;
     });
   }, [getItem, toast]);
@@ -309,16 +330,18 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       const item = getItem(itemIdToUnequip);
       const newState = { ...prev };
-      newState.equippedItems[slot] = null; // Unequip
+      newState.equippedItems = {...newState.equippedItems, [slot]: null};
+      newState.inventory = [...newState.inventory];
 
-      // Add item back to inventory
-      const existingItem = newState.inventory.find(invItem => invItem.itemId === itemIdToUnequip);
-      if (existingItem) {
-        existingItem.quantity += 1;
+      const existingItemIndex = newState.inventory.findIndex(invItem => invItem.itemId === itemIdToUnequip);
+      if (existingItemIndex > -1) {
+        newState.inventory[existingItemIndex] = {...newState.inventory[existingItemIndex], quantity: newState.inventory[existingItemIndex].quantity + 1};
       } else {
         newState.inventory.push({ itemId: itemIdToUnequip, quantity: 1 });
       }
-      toast({ title: "Item Unequipped", description: `${item?.name || 'Item'} unequipped.` });
+      setTimeout(() => {
+        toast({ title: "Item Unequipped", description: `${item?.name || 'Item'} unequipped.` });
+      }, 0);
       return newState;
     });
   }, [getItem, toast]);
@@ -329,38 +352,51 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const itemInInventory = prev.inventory.find(invItem => invItem.itemId === itemId);
 
       if (!itemToConsume || !itemToConsume.consumable || !itemInInventory || itemInInventory.quantity < quantity) {
-        toast({ title: "Cannot Consume", description: "Item not available or not consumable.", variant: "destructive"});
+        setTimeout(() => {
+          toast({ title: "Cannot Consume", description: "Item not available or not consumable.", variant: "destructive"});
+        }, 0);
         return prev;
       }
       
-      let newState = { ...prev };
+      let newState = { ...prev }; // Start with a fresh copy of previous state
+      // Ensure deep copies for nested structures that will be modified
+      newState.resources = JSON.parse(JSON.stringify(prev.resources));
+      newState.inventory = JSON.parse(JSON.stringify(prev.inventory));
+
+
       for(let i=0; i < quantity; i++){
         if (itemToConsume.consumeEffect) {
-            newState = itemToConsume.consumeEffect(newState); // Apply effect
+            // Pass a mutable copy of the current iteration of newState to consumeEffect
+            newState = itemToConsume.consumeEffect(newState); 
         }
       }
       
-      // Ensure itemInInventory is referenced from newState if consumeEffect modified inventory
-      const currentItemInInventory = newState.inventory.find(invItem => invItem.itemId === itemId);
-      if (currentItemInInventory) {
-        currentItemInInventory.quantity -= quantity;
-        if (currentItemInInventory.quantity <= 0) {
-          newState.inventory = newState.inventory.filter(invItem => invItem.itemId !== itemId);
+      const currentItemInInventoryIndex = newState.inventory.findIndex(invItem => invItem.itemId === itemId);
+      if (currentItemInInventoryIndex > -1) {
+        newState.inventory[currentItemInInventoryIndex].quantity -= quantity;
+        if (newState.inventory[currentItemInInventoryIndex].quantity <= 0) {
+          newState.inventory.splice(currentItemInInventoryIndex, 1);
         }
       }
-
-      toast({ title: "Item Consumed", description: `${itemToConsume.name} consumed.` });
+      
+      setTimeout(() => {
+        toast({ title: "Item Consumed", description: `${itemToConsume.name} consumed.` });
+      }, 0);
       return newState;
     });
   }, [getItem, toast]);
 
   const switchCharacter = useCallback((characterId: string) => {
     if (!initialCharacters[characterId]) {
-      toast({ title: "Invalid Character", variant: "destructive" });
+      setTimeout(() => {
+        toast({ title: "Invalid Character", variant: "destructive" });
+      }, 0);
       return;
     }
-    setGameState(prev => ({ ...prev, currentCharacterId: characterId, equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {}) })); // Reset equipped items on char switch
-    toast({ title: "Character Switched", description: `Now playing as ${initialCharacters[characterId].name}.` });
+    setGameState(prev => ({ ...prev, currentCharacterId: characterId, equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {}) }));
+    setTimeout(() => {
+      toast({ title: "Character Switched", description: `Now playing as ${initialCharacters[characterId].name}.` });
+    }, 0);
   }, [toast]);
 
   const setMultiplier = useCallback((multiplier: MultiplierValue) => {
@@ -370,53 +406,94 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Achievements Check
   useEffect(() => {
     const newlyUnlocked: string[] = [];
+    let stateChangedByAchievement = false;
+    let achievementToastMessages: Array<{title: string, description: string}> = [];
+
+    // Use a functional update for setGameState if we need to apply multiple rewards sequentially
+    // or ensure we're working with the very latest state for each achievement check.
+    // However, simple batching is often fine.
+    
+    let tempGameState = {...gameState}; // Work on a temporary copy for condition checking if needed
+
     Object.values(initialAchievements).forEach(ach => {
-      if (!gameState.unlockedAchievements.includes(ach.id) && ach.condition(gameState)) {
+      if (!tempGameState.unlockedAchievements.includes(ach.id) && ach.condition(tempGameState)) {
         newlyUnlocked.push(ach.id);
-        
-        // Apply rewards
-        setGameState(prev => {
-          const newState = {...prev};
-          if (ach.reward.points) {
-            Object.entries(ach.reward.points).forEach(([resId, amount]) => {
-              if (newState.resources[resId]) newState.resources[resId].amount += amount;
-            });
-          }
-          if (ach.reward.items) {
-            ach.reward.items.forEach(rewardItem => {
-              const existingItem = newState.inventory.find(invItem => invItem.itemId === rewardItem.itemId);
-              if (existingItem) {
-                existingItem.quantity += rewardItem.quantity;
-              } else {
-                newState.inventory.push({ itemId: rewardItem.itemId, quantity: rewardItem.quantity });
-              }
-            });
-          }
-          if (ach.reward.permanentBoosts) {
-            const { stat, value } = ach.reward.permanentBoosts;
-            if (stat === 'globalPpsMultiplier') newState.permanentBoosts.globalPpsMultiplier += value;
-            else if (stat === 'globalDropRateMultiplier') newState.permanentBoosts.globalDropRateMultiplier += value;
-            // Add other specific permanent boosts here
-            else newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 0) + value;
-          }
-          return newState;
-        });
-        toast({ title: "Achievement Unlocked!", description: ach.name });
+        achievementToastMessages.push({ title: "Achievement Unlocked!", description: ach.name });
+        stateChangedByAchievement = true;
+
+        // Apply rewards directly to tempGameState for subsequent checks within this loop
+        if (ach.reward.points) {
+          Object.entries(ach.reward.points).forEach(([resId, amount]) => {
+            if (tempGameState.resources[resId]) tempGameState.resources[resId].amount += amount;
+          });
+        }
+        if (ach.reward.items) {
+          ach.reward.items.forEach(rewardItem => {
+            const existingItem = tempGameState.inventory.find(invItem => invItem.itemId === rewardItem.itemId);
+            if (existingItem) {
+              existingItem.quantity += rewardItem.quantity;
+            } else {
+              tempGameState.inventory.push({ itemId: rewardItem.itemId, quantity: rewardItem.quantity });
+            }
+          });
+        }
+        if (ach.reward.permanentBoosts) {
+          const { stat, value } = ach.reward.permanentBoosts;
+          if (stat === 'globalPpsMultiplier') tempGameState.permanentBoosts.globalPpsMultiplier += value;
+          else if (stat === 'globalDropRateMultiplier') tempGameState.permanentBoosts.globalDropRateMultiplier += value;
+          else tempGameState.permanentBoosts[stat] = (tempGameState.permanentBoosts[stat] || 0) + value;
+        }
       }
     });
-    if (newlyUnlocked.length > 0) {
-      setGameState(prev => ({ ...prev, unlockedAchievements: [...prev.unlockedAchievements, ...newlyUnlocked]}));
+
+    if (stateChangedByAchievement || newlyUnlocked.length > 0) {
+      setGameState(prev => {
+        const newState = {...prev};
+        // Re-apply rewards to the actual 'prev' state to ensure correctness
+        // This avoids issues if tempGameState was based on a slightly stale 'gameState'
+        // from the outer scope of the useEffect.
+        newlyUnlocked.forEach(unlockedAchId => {
+            const ach = initialAchievements[unlockedAchId];
+            if (ach.reward.points) {
+                Object.entries(ach.reward.points).forEach(([resId, amount]) => {
+                if (newState.resources[resId]) newState.resources[resId].amount += amount;
+                });
+            }
+            if (ach.reward.items) {
+                ach.reward.items.forEach(rewardItem => {
+                const existingItem = newState.inventory.find(invItem => invItem.itemId === rewardItem.itemId);
+                if (existingItem) {
+                    existingItem.quantity += rewardItem.quantity;
+                } else {
+                    newState.inventory.push({ itemId: rewardItem.itemId, quantity: rewardItem.quantity });
+                }
+                });
+            }
+            if (ach.reward.permanentBoosts) {
+                const { stat, value } = ach.reward.permanentBoosts;
+                if (stat === 'globalPpsMultiplier') newState.permanentBoosts.globalPpsMultiplier += value;
+                else if (stat === 'globalDropRateMultiplier') newState.permanentBoosts.globalDropRateMultiplier += value;
+                else newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 0) + value;
+            }
+        });
+        newState.unlockedAchievements = [...prev.unlockedAchievements, ...newlyUnlocked];
+        return newState;
+      });
+
+      achievementToastMessages.forEach(msg => {
+        setTimeout(() => toast(msg), 0);
+      });
     }
-  }, [gameState, toast]);
+  }, [gameState, toast]); // gameState.unlockedAchievements could be added but might cause loops if not careful
 
   // Save and Load
   const saveGame = useCallback(() => {
     try {
       localStorage.setItem('chronoClickerSave', JSON.stringify(gameState));
-      toast({ title: "Game Saved!" });
+      setTimeout(() => toast({ title: "Game Saved!" }), 0);
     } catch (error) {
       console.error("Failed to save game:", error);
-      toast({ title: "Save Failed", variant: "destructive" });
+      setTimeout(() => toast({ title: "Save Failed", variant: "destructive" }), 0);
     }
   }, [gameState, toast]);
 
@@ -425,14 +502,13 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const savedGame = localStorage.getItem('chronoClickerSave');
       if (savedGame) {
         const loadedState = JSON.parse(savedGame) as GameState;
-        // Basic validation/migration can be done here if state structure changes
         setGameState(loadedState);
-        toast({ title: "Game Loaded!" });
+        setTimeout(() => toast({ title: "Game Loaded!" }), 0);
         return true;
       }
     } catch (error) {
       console.error("Failed to load game:", error);
-      toast({ title: "Load Failed", description: "Save data might be corrupted.", variant: "destructive" });
+      setTimeout(() => toast({ title: "Load Failed", description: "Save data might be corrupted.", variant: "destructive" }), 0);
     }
     return false;
   }, [setGameState, toast]);
@@ -449,37 +525,36 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast({ title: "Save Exported!" });
+      setTimeout(() => toast({ title: "Save Exported!" }), 0);
     } catch (error) {
       console.error("Failed to export save:", error);
-      toast({ title: "Export Failed", variant: "destructive" });
+      setTimeout(() => toast({ title: "Export Failed", variant: "destructive" }), 0);
     }
   }, [gameState, toast]);
 
   const importSave = useCallback((jsonData: string): boolean => {
     try {
       const importedState = JSON.parse(jsonData) as GameState;
-      // Add more validation as needed
       if (importedState.resources && importedState.generators) {
         setGameState(importedState);
-        toast({ title: "Save Imported Successfully!" });
+        setTimeout(() => toast({ title: "Save Imported Successfully!" }), 0);
         return true;
       } else {
-        toast({ title: "Import Failed", description: "Invalid save file format.", variant: "destructive" });
+        setTimeout(() => toast({ title: "Import Failed", description: "Invalid save file format.", variant: "destructive" }), 0);
         return false;
       }
     } catch (error) {
       console.error("Failed to import save:", error);
-      toast({ title: "Import Failed", description: "Could not parse save file.", variant: "destructive" });
+      setTimeout(() => toast({ title: "Import Failed", description: "Could not parse save file.", variant: "destructive" }), 0);
       return false;
     }
   }, [setGameState, toast]);
 
   const resetGame = useCallback(() => {
     if(window.confirm("Are you sure you want to reset your game? All progress will be lost.")) {
-      setGameState(JSON.parse(JSON.stringify(defaultGameState))); // Reset with a deep copy of default
+      setGameState(JSON.parse(JSON.stringify(defaultGameState))); 
       localStorage.removeItem('chronoClickerSave');
-      toast({ title: "Game Reset", description: "Your progress has been reset." });
+      setTimeout(() => toast({ title: "Game Reset", description: "Your progress has been reset." }), 0);
     }
   }, [toast]);
   
@@ -487,14 +562,14 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     loadGame();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only on mount
+  }, []); 
 
   // Auto-save periodically
   useEffect(() => {
-    const autoSaveTimeout = setTimeout(() => {
+    const autoSaveInterval = setInterval(() => {
         saveGame();
-    }, 30000); // Autosave every 30 seconds
-    return () => clearTimeout(autoSaveTimeout);
+    }, 30000); 
+    return () => clearInterval(autoSaveInterval);
   }, [gameState, saveGame]);
 
 
