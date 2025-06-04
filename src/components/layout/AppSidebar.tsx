@@ -3,6 +3,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import React from 'react'; // Import React for React.memo
 import {
   Sidebar,
   SidebarHeader,
@@ -27,7 +28,8 @@ const navItems = [
   { href: '/settings', label: 'Temporal Controls', icon: Settings },
 ];
 
-export function AppSidebar() {
+// Define the component logic
+const AppSidebarComponent = () => {
   const pathname = usePathname();
 
   return (
@@ -73,4 +75,8 @@ export function AppSidebar() {
       </SidebarFooter>
     </Sidebar>
   );
-}
+};
+
+// Export the memoized component
+export const AppSidebar = React.memo(AppSidebarComponent);
+AppSidebar.displayName = 'AppSidebar'; // Optional: for better debugging
