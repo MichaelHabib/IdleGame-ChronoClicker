@@ -44,13 +44,13 @@ export const initialGenerators: Record<string, Generator> = {
   libraryScrolls: {
     id: 'libraryScrolls',
     name: 'Library of Scrolls',
-    description: 'Generates Resource 1 through ancient texts.',
+    description: 'Generates Temporal Dust through ancient texts.',
     icon: 'ScrollText',
     baseCost: 50,
     costResource: 'points',
     costScale: 1.18,
     basePps: 2,
-    producesResource: 'resource1',
+    producesResource: 'temporalDust', // Changed from resource1
     quantity: 0,
   },
 };
