@@ -1,3 +1,4 @@
+
 "use client";
 
 import { GameLayout } from '@/components/layout/GameLayout';
@@ -5,6 +6,7 @@ import { useGame } from '@/context/GameContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { initialAchievements } from '@/config/achievements';
+import { initialItems } from '@/config/items'; // Added import
 import * as LucideIcons from 'lucide-react';
 import { Trophy, CheckCircle, Lock, Gift } from 'lucide-react';
 
