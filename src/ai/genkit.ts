@@ -1,3 +1,4 @@
+
 'use client';
 // This file has been modified for static site export.
 // Genkit and server-side AI features are not available in a static build.
