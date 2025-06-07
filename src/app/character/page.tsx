@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from 'react';
@@ -8,27 +9,39 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { initialCharacters } from '@/config/characters';
 import * as LucideIcons from 'lucide-react';
-import { User, ShieldCheck, Zap, HelpCircle, CheckCircle } from 'lucide-react';
-import type { CharacterSlotType } from '@/lib/types';
-import { CharacterSlots } from '@/lib/types';
+import { User, ShieldCheck, Zap, HelpCircle, CheckCircle, Package, PlusCircle } from 'lucide-react';
+import type { CharacterSlotType, Item } from '@/lib/types';
+import { CharacterSlots, ItemType, ArmourGroup, WeaponGroup, AccessoryGroup } from '@/lib/types';
 import { MoreInfoModal } from '@/components/game/MoreInfoModal';
+import { SelectGearModal } from '@/components/game/SelectGearModal'; // New Modal
 import Image from 'next/image';
 
 export default function CharacterPage() {
-  const { gameState, switchCharacter, getCharacter, getItem, unequipItem } = useGame();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalContent, setModalContent] = useState({ title: "", content: "" });
+  const { gameState, switchCharacter, getCharacter, getItem, equipItem, unequipItem } = useGame();
+  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
+  const [infoModalContent, setInfoModalContent] = useState({ title: "", content: "" });
+
+  const [isGearSelectModalOpen, setIsGearSelectModalOpen] = useState(false);
+  const [selectedSlotForModal, setSelectedSlotForModal] = useState<CharacterSlotType | null>(null);
+  const [compatibleItemsForSlot, setCompatibleItemsForSlot] = useState<Array<{item: Item, quantity: number}>>([]);
 
   const currentCharacter = getCharacter();
+
+  const getIcon = (iconName?: string): React.ElementType => {
+    if (iconName && LucideIcons[iconName as keyof typeof LucideIcons]) {
+      return LucideIcons[iconName as keyof typeof LucideIcons];
+    }
+    return Package; // Default icon
+  };
 
   const openCharacterInfoModal = (charId: string) => {
     const char = initialCharacters[charId];
     if (char) {
-      setModalContent({
+      setInfoModalContent({
         title: `About ${char.name}`,
         content: char.description + `\n\nPPS Multiplier: x${char.basePpsMultiplier.toFixed(2)}\nDrop Rate Multiplier: x${char.baseDropRateMultiplier.toFixed(2)}`
       });
-      setIsModalOpen(true);
+      setIsInfoModalOpen(true);
     }
   };
   
@@ -40,13 +53,57 @@ export default function CharacterPage() {
         .join('\n');
       if (!statsString) statsString = "No special stats.";
 
-      setModalContent({
+      setInfoModalContent({
         title: `About ${item.name}`,
         content: `${item.description}\n\nType: ${item.type}\nGroup: ${item.group || 'N/A'}\nMaterial: ${item.material || 'N/A'}\nRarity: ${item.rarity || 'Common'}\n\nStats:\n${statsString}`
       });
-      setIsModalOpen(true);
+      setIsInfoModalOpen(true);
     }
   };
+
+  const isItemCompatibleForSlot = (item: Item, slot: CharacterSlotType): boolean => {
+    if (!item.equippable) return false;
+
+    // Direct slot match from item's definition
+    if (item.slot === slot) return true;
+
+    // Group-based matching for flexible slots
+    // Ring: if item group is Ring, it can go into Ring1 or Ring2
+    if (item.group === AccessoryGroup.Ring && (slot === "Ring1" || slot === "Ring2")) return true;
+    // If item's defined slot is generic "Ring", allow it in Ring1 or Ring2
+    if (item.slot === AccessoryGroup.Ring && (slot === "Ring1" || slot === "Ring2")) return true;
+
+
+    const itemType = item.type;
+    const itemGroup = item.group;
+
+    if (itemType === ItemType.Armour) {
+      if (itemGroup === ArmourGroup.Helmet && slot === "Head") return true;
+      if (itemGroup === ArmourGroup.Chest && slot === "Body") return true;
+      if (itemGroup === ArmourGroup.Leggings && slot === "Legs") return true;
+      if (itemGroup === ArmourGroup.Boots && slot === "Feet") return true;
+    }
+    if (itemType === ItemType.Weapon && slot === "Weapon") return true;
+    if (itemType === ItemType.Accessory) {
+      if (itemGroup === AccessoryGroup.Necklace && slot === "Necklace") return true;
+      // Ring case handled above
+    }
+    return false;
+  };
+
+  const handleEmptySlotClick = (slot: CharacterSlotType) => {
+    const available = gameState.inventory
+      .map(invItem => {
+        const itemDetails = getItem(invItem.itemId);
+        return itemDetails ? { item: itemDetails, quantity: invItem.quantity } : null;
+      })
+      .filter(mappedItem => mappedItem && isItemCompatibleForSlot(mappedItem.item, slot)) as Array<{item: Item, quantity: number}>;
+    
+    setCompatibleItemsForSlot(available);
+    setSelectedSlotForModal(slot);
+    setIsGearSelectModalOpen(true);
+  };
+
 
   return (
     <GameLayout>
@@ -61,7 +118,7 @@ export default function CharacterPage() {
           </CardHeader>
           <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {Object.values(initialCharacters).map((char) => {
-              const Icon = char.icon && LucideIcons[char.icon as keyof typeof LucideIcons] ? LucideIcons[char.icon as keyof typeof LucideIcons] : LucideIcons.UserCircle2;
+              const Icon = getIcon(char.icon);
               const isCurrent = gameState.currentCharacterId === char.id;
               return (
                 <Card key={char.id} className={`transition-all ${isCurrent ? 'ring-2 ring-primary shadow-xl' : 'hover:shadow-md'}`}>
@@ -101,19 +158,17 @@ export default function CharacterPage() {
           <Card className="shadow-lg">
             <CardHeader>
               <CardTitle className="font-headline text-2xl">Equipped Gear ({currentCharacter.name})</CardTitle>
-              <CardDescription>Manage items equipped by your current persona.</CardDescription>
+              <CardDescription>Manage items equipped by your current persona. Click an empty slot to equip.</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
               {CharacterSlots.map((slot) => {
                 const equippedItemId = gameState.equippedItems[slot];
                 const item = equippedItemId ? getItem(equippedItemId) : null;
-                const ItemIcon = item?.icon && LucideIcons[item.icon as keyof typeof LucideIcons] 
-                    ? LucideIcons[item.icon as keyof typeof LucideIcons] 
-                    : LucideIcons.Package;
+                const ItemIcon = item ? getIcon(item.icon) : PlusCircle;
 
                 return (
                   <Card key={slot} className="flex flex-col items-center justify-center p-3 min-h-[120px] bg-muted/30">
-                    <p className="text-sm font-semibold text-muted-foreground">{slot}</p>
+                    <p className="text-sm font-semibold text-muted-foreground capitalize">{slot.replace(/([A-Z0-9])/g, ' $1').trim()}</p>
                     {item ? (
                       <div className="text-center mt-1">
                         <Avatar className="mx-auto mb-1">
@@ -129,7 +184,14 @@ export default function CharacterPage() {
                         </div>
                       </div>
                     ) : (
-                      <p className="text-xs text-muted-foreground mt-2">(Empty)</p>
+                       <Button
+                        variant="ghost"
+                        className="w-full h-full flex flex-col items-center justify-center text-muted-foreground hover:bg-muted/50 hover:text-foreground p-2"
+                        onClick={() => handleEmptySlotClick(slot)}
+                      >
+                        <ItemIcon className="h-6 w-6 mb-1" />
+                        <span className="text-xs text-center">Equip Item</span>
+                      </Button>
                     )}
                   </Card>
                 );
@@ -139,12 +201,22 @@ export default function CharacterPage() {
         )}
       </div>
       <MoreInfoModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        title={modalContent.title}
+        isOpen={isInfoModalOpen} 
+        onClose={() => setIsInfoModalOpen(false)} 
+        title={infoModalContent.title}
       >
-        <pre className="whitespace-pre-wrap font-body text-sm">{modalContent.content}</pre>
+        <pre className="whitespace-pre-wrap font-body text-sm">{infoModalContent.content}</pre>
       </MoreInfoModal>
+      <SelectGearModal
+        isOpen={isGearSelectModalOpen}
+        onClose={() => setIsGearSelectModalOpen(false)}
+        slotToEquip={selectedSlotForModal}
+        availableItems={compatibleItemsForSlot}
+        onEquipItem={equipItem}
+        getIcon={getIcon}
+      />
     </GameLayout>
   );
 }
+
+    
