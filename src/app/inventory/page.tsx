@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from 'react';
@@ -7,9 +8,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import * as LucideIcons from 'lucide-react';
-import { Backpack, HelpCircle, Zap, Shield, Gem, PackagePlus, CircleSlash } from 'lucide-react';
+import { Backpack, HelpCircle, Zap, Shield, Gem, Package, CircleSlash } from 'lucide-react'; // Corrected Package to Package from lucide
 import type { Item, CharacterSlotType } from '@/lib/types';
 import { MoreInfoModal } from '@/components/game/MoreInfoModal';
+import { Badge } from "@/components/ui/badge"; // Added missing import for Badge
 import {
   Select,
   SelectContent,
