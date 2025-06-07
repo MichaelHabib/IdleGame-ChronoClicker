@@ -1,4 +1,4 @@
-import { config } from 'dotenv';
-config();
-
-// Removed import for '@/ai/flows/loot-drop-orchestrator.ts';
+'use client';
+// This file has been modified for static site export.
+// AI development server-side flows are disabled.
+export {}; // Ensures it's treated as a module

@@ -1,7 +1,10 @@
-import {genkit} from 'genkit';
-import {googleAI} from '@genkit-ai/googleai';
+'use client';
+// This file has been modified for static site export.
+// Genkit and server-side AI features are not available in a static build.
+console.warn(
+  'Genkit AI features are disabled as this is a static client-side export.'
+);
 
-export const ai = genkit({
-  plugins: [googleAI()],
-  model: 'googleai/gemini-2.0-flash',
-});
+// Exporting a placeholder to avoid breaking imports if 'ai' was used elsewhere,
+// though actual AI functionality is removed.
+export const ai: any = undefined;
