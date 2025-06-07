@@ -1,8 +1,12 @@
 
 import type {NextConfig} from 'next';
 
+const github_pages_url = 'https://michaelhabib.github.io/IdleGame-ChronoClicker/';
+
 const nextConfig: NextConfig = {
-  output: 'export',
+  output: 'export', // Add this line to enable static export
+  assetPrefix: process.env.npm_lifecycle_event === 'build-github' ? github_pages_url : '',
+  distDir: 'docs', // Change the output directory to 'docs'
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -20,6 +24,9 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  dangerouslyAllowSVG: true, // Allow SVGs
+  contentDispositionType: 'attachment',
+  contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
 };
 
 export default nextConfig;
