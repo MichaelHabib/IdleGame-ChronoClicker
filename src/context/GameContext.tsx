@@ -12,15 +12,17 @@ import { initialAchievements } from '@/config/achievements';
 import { CharacterSlots } from '@/lib/types';
 import { useToast } from "@/hooks/use-toast";
 
+// Add one of each equippable item by default to startingGear
 const startingGear: { itemId: string; quantity: number }[] = Object.values(initialItems)
   .filter(item => item.equippable)
   .map(item => ({ itemId: item.id, quantity: 1 }));
 
-const defaultGameState: GameState = {
+// Define the static parts of the default game state. lastUpdate will be set dynamically.
+const staticDefaultGameStateParts: Omit<GameState, 'lastUpdate'> = {
   points: 0,
   resources: JSON.parse(JSON.stringify(initialResources)),
   generators: JSON.parse(JSON.stringify(initialGenerators)),
-  inventory: startingGear,
+  inventory: startingGear, // startingGear includes one of each equippable item
   equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {} as GameState['equippedItems']),
   currentCharacterId: defaultCharacterId,
   unlockedAchievements: [],
@@ -32,9 +34,15 @@ const defaultGameState: GameState = {
     currentMultiplier: 1,
     gameSpeed: 1,
   },
-  lastUpdate: Date.now(),
   totalClicks: 0,
 };
+
+// Function to get a fresh, complete default GameState with current timestamp
+const getFreshDefaultGameState = (): GameState => ({
+  ...JSON.parse(JSON.stringify(staticDefaultGameStateParts)), // Deep clone static parts
+  lastUpdate: Date.now(), // Set current time
+});
+
 
 interface GameContextType {
   gameState: GameState;
@@ -66,14 +74,15 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (savedGame) {
       try {
         const loadedState = JSON.parse(savedGame) as GameState;
-        const cleanDefault = JSON.parse(JSON.stringify(defaultGameState));
-        return { ...cleanDefault, ...loadedState };
+        const freshDefault = getFreshDefaultGameState();
+        // Merge, ensuring loadedState overwrites defaults where applicable, and lastUpdate is current.
+        return { ...freshDefault, ...loadedState, lastUpdate: Date.now() };
       } catch (error) {
         console.error("Failed to parse saved game data:", error);
-        return JSON.parse(JSON.stringify(defaultGameState));
+        return getFreshDefaultGameState(); // Fallback to fresh default
       }
     }
-    return JSON.parse(JSON.stringify(defaultGameState));
+    return getFreshDefaultGameState(); // Fresh start
   });
   const { toast } = useToast();
 
@@ -202,7 +211,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         toast({ title: "Item Found!", description: `You found a ${droppedItemName}!` });
       }, 0);
     }
-  }, [getCharacter, getItem, toast, gameState.permanentBoosts.globalDropRateMultiplier, gameState.resources, gameState.equippedItems, gameState.generators ]);
+  }, [getCharacter, getItem, toast, gameState.permanentBoosts.globalDropRateMultiplier, gameState.settings.currentMultiplier ]); // Added missing dependencies that were indirectly used or could affect logic flow.
 
 
   const buyGenerator = useCallback((generatorId: string) => {
@@ -221,11 +230,13 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       let totalCost = 0;
       let numToBuy = 0;
       
+      const tempStateForCostCalc = JSON.parse(JSON.stringify(prev)); // Use a clone for cost calculation
+
       if (currentMultiplier === Number.MAX_SAFE_INTEGER) {
-          let tempQuantity = generator.quantity;
+          let tempQuantity = tempStateForCostCalc.generators[generatorId].quantity;
           for (let i = 0; i < 100000; i++) { 
               const costForThisOne = generator.baseCost * Math.pow(generator.costScale, tempQuantity + i);
-              if (costResource.amount >= totalCost + costForThisOne) {
+              if (tempStateForCostCalc.resources[generator.costResource].amount >= totalCost + costForThisOne) {
                   totalCost += costForThisOne;
                   numToBuy++;
               } else {
@@ -233,9 +244,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               }
           }
       } else {
+          let tempQuantity = tempStateForCostCalc.generators[generatorId].quantity;
           for (let i = 0; i < currentMultiplier; i++) {
-              const costForThisOne = generator.baseCost * Math.pow(generator.costScale, generator.quantity + i);
-              if (costResource.amount >= totalCost + costForThisOne) {
+              const costForThisOne = generator.baseCost * Math.pow(generator.costScale, tempQuantity + i);
+              if (tempStateForCostCalc.resources[generator.costResource].amount >= totalCost + costForThisOne) {
                   totalCost += costForThisOne;
                   numToBuy++;
               } else {
@@ -297,13 +309,36 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const equipItem = useCallback((itemId: string, slot: CharacterSlotType) => {
     setGameState(prev => {
       const itemToEquip = getItem(itemId);
-      if (!itemToEquip || !itemToEquip.equippable || (itemToEquip.slot && itemToEquip.slot !== slot && !(itemToEquip.group === "Ring" && (slot === "Ring1" || slot === "Ring2")) )) {
-        if(!(itemToEquip?.group === "Ring" && (slot === "Ring1" || slot === "Ring2") && (itemToEquip.slot === "Ring1" || itemToEquip.slot === "Ring2" || itemToEquip.slot === "Ring" ))){ // Adjusted to allow any "Ring" group item into "Ring1" or "Ring2"
-             setTimeout(() => {
-                toast({ title: "Cannot Equip", description: "Item cannot be equipped in this slot.", variant: "destructive"});
-             }, 0);
-             return prev;
-        }
+      if (!itemToEquip || !itemToEquip.equippable) {
+           setTimeout(() => {
+              toast({ title: "Cannot Equip", description: "Item is not equippable.", variant: "destructive"});
+           }, 0);
+           return prev;
+      }
+      
+      // Check compatibility for the specific slot
+      let isCompatible = false;
+      if (itemToEquip.slot === slot) { // Direct slot match
+        isCompatible = true;
+      } else if (itemToEquip.group === AccessoryGroup.Ring && (slot === "Ring1" || slot === "Ring2")) { // Ring logic
+        isCompatible = true;
+      } else if (itemToEquip.type === ItemType.Armour) {
+        if (itemToEquip.group === ArmourGroup.Helmet && slot === "Head") isCompatible = true;
+        if (itemToEquip.group === ArmourGroup.Chest && slot === "Body") isCompatible = true;
+        if (itemToEquip.group === ArmourGroup.Leggings && slot === "Legs") isCompatible = true;
+        if (itemToEquip.group === ArmourGroup.Boots && slot === "Feet") isCompatible = true;
+      } else if (itemToEquip.type === ItemType.Weapon && slot === "Weapon") {
+        isCompatible = true;
+      } else if (itemToEquip.type === ItemType.Accessory) {
+        if (itemToEquip.group === AccessoryGroup.Necklace && slot === "Necklace") isCompatible = true;
+      }
+
+
+      if (!isCompatible) {
+          setTimeout(() => {
+              toast({ title: "Cannot Equip", description: `${itemToEquip.name} cannot be equipped in the ${slot} slot.`, variant: "destructive"});
+          }, 0);
+          return prev;
       }
       
       const newState: GameState = JSON.parse(JSON.stringify(prev));
@@ -318,6 +353,9 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       } else {
          console.warn(`Item ${itemId} to be equipped was not found in inventory for quantity decrement.`);
+         // If for some reason it's not in inventory, we can't equip. This path should ideally not be hit if UI is correct.
+         setTimeout(() => { toast({ title: "Equip Error", description: "Item not found in inventory.", variant: "destructive"}); }, 0);
+         return prev; // Revert to previous state if item not found to remove
       }
       
       if (currentEquippedId) { 
@@ -404,14 +442,32 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, 0);
       return;
     }
-    setGameState(prev => ({ ...JSON.parse(JSON.stringify(prev)), currentCharacterId: characterId, equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {} as GameState['equippedItems']) })); 
+    setGameState(prev => {
+      const newState = JSON.parse(JSON.stringify(prev));
+      newState.currentCharacterId = characterId;
+      // When switching characters, unequip all items and return them to inventory
+      Object.keys(newState.equippedItems).forEach(slotKey => {
+        const slot = slotKey as CharacterSlotType;
+        const itemId = newState.equippedItems[slot];
+        if (itemId) {
+          const itemIndex = newState.inventory.findIndex(inv => inv.itemId === itemId);
+          if (itemIndex > -1) {
+            newState.inventory[itemIndex].quantity += 1;
+          } else {
+            newState.inventory.push({ itemId: itemId, quantity: 1 });
+          }
+          newState.equippedItems[slot] = null;
+        }
+      });
+      return newState;
+    }); 
     setTimeout(() => { 
-      toast({ title: "Character Switched", description: `Now playing as ${initialCharacters[characterId].name}.` });
+      toast({ title: "Character Switched", description: `Now playing as ${initialCharacters[characterId].name}. All items returned to inventory.` });
     }, 0);
   }, [toast]);
 
   const setMultiplier = useCallback((multiplier: MultiplierValue) => {
-    setGameState(prev => ({ ...prev, settings: { ...prev.settings, currentMultiplier: multiplier } }));
+    setGameState(prev => ({ ...JSON.parse(JSON.stringify(prev)), settings: { ...JSON.parse(JSON.stringify(prev.settings)), currentMultiplier: multiplier } }));
   }, []);
   
   useEffect(() => {
@@ -454,9 +510,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                      if (stat === 'globalPpsMultiplier' || stat === 'globalDropRateMultiplier') {
                         newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 1.0) + value; 
                      } else {
-                        // For other potential permanent boosts, ensure they are initialized correctly.
-                        const currentBoostValue = typeof newState.permanentBoosts[stat] === 'number' ? newState.permanentBoosts[stat] : 0;
-                        newState.permanentBoosts[stat] = currentBoostValue + value;
+                        const currentBoostValue = typeof (newState.permanentBoosts as any)[stat] === 'number' ? (newState.permanentBoosts as any)[stat] : 0;
+                        (newState.permanentBoosts as any)[stat] = currentBoostValue + value;
                      }
                 }
             });
@@ -465,7 +520,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         achievementToastMessages.forEach(msg => setTimeout(() => toast(msg), 0)); 
     }
-  }, [gameState, toast]); 
+  }, [gameState.totalClicks, gameState.resources, gameState.generators, gameState.unlockedAchievements, toast]); // Dependencies for achievements
 
   const saveGame = useCallback(() => {
     try {
@@ -483,8 +538,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const savedGame = localStorage.getItem('chronoClickerSave');
       if (savedGame) {
         const loadedState = JSON.parse(savedGame) as GameState;
-        const cleanDefault = JSON.parse(JSON.stringify(defaultGameState)); 
-        setGameState({ ...cleanDefault, ...loadedState, lastUpdate: Date.now() }); // Ensure lastUpdate is current on load
+        const freshDefault = getFreshDefaultGameState();
+        setGameState({ ...freshDefault, ...loadedState, lastUpdate: Date.now() });
         setTimeout(() => toast({ title: "Game Loaded!" }), 0); 
         return true;
       }
@@ -493,7 +548,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setTimeout(() => toast({ title: "Load Failed", description: "Save data might be corrupted.", variant: "destructive" }), 0); 
     }
     return false;
-  }, [setGameState, toast]); 
+  }, [toast]); 
 
   const exportSave = useCallback(() => {
     try {
@@ -518,8 +573,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const importedState = JSON.parse(jsonData) as GameState;
       if (importedState && typeof importedState.resources === 'object' && typeof importedState.generators === 'object') {
-        const cleanDefault = JSON.parse(JSON.stringify(defaultGameState));
-        setGameState({ ...cleanDefault, ...importedState, lastUpdate: Date.now() }); // Ensure lastUpdate is current
+        const freshDefault = getFreshDefaultGameState();
+        setGameState({ ...freshDefault, ...importedState, lastUpdate: Date.now() });
         setTimeout(() => toast({ title: "Save Imported Successfully!" }), 0); 
         return true;
       } else {
@@ -531,15 +586,15 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setTimeout(() => toast({ title: "Import Failed", description: "Could not parse save file.", variant: "destructive" }), 0); 
       return false;
     }
-  }, [setGameState, toast]); 
+  }, [toast]); 
 
   const resetGame = useCallback(() => {
     if(window.confirm("Are you sure you want to reset your game? All progress will be lost.")) {
-      setGameState(JSON.parse(JSON.stringify(defaultGameState))); 
+      setGameState(getFreshDefaultGameState());
       localStorage.removeItem('chronoClickerSave');
       setTimeout(() => toast({ title: "Game Reset", description: "Your progress has been reset." }), 0); 
     }
-  }, [toast, setGameState]); 
+  }, [toast]); 
   
   useEffect(() => {
     const autoSaveInterval = setInterval(saveGame, 10000); // Auto-save every 10 seconds
