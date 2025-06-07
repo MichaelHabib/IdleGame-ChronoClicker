@@ -12,13 +12,16 @@ import { initialAchievements } from '@/config/achievements';
 import { CharacterSlots } from '@/lib/types';
 import { useToast } from "@/hooks/use-toast";
 
+const startingGear: { itemId: string; quantity: number }[] = Object.values(initialItems)
+  .filter(item => item.equippable)
+  .map(item => ({ itemId: item.id, quantity: 1 }));
 
 const defaultGameState: GameState = {
   points: 0,
   resources: JSON.parse(JSON.stringify(initialResources)),
   generators: JSON.parse(JSON.stringify(initialGenerators)),
-  inventory: [],
-  equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {}),
+  inventory: startingGear,
+  equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {} as GameState['equippedItems']),
   currentCharacterId: defaultCharacterId,
   unlockedAchievements: [],
   permanentBoosts: {
@@ -55,7 +58,7 @@ interface GameContextType {
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
-const BASE_ITEM_DROP_CHANCE = 0.005; // 0.5% base chance to drop an item on click
+const BASE_ITEM_DROP_CHANCE = 0.005; // 0.5% base chance
 
 export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [gameState, setGameState] = useState<GameState>(() => {
@@ -63,7 +66,6 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (savedGame) {
       try {
         const loadedState = JSON.parse(savedGame) as GameState;
-        // Ensure new fields from defaultGameState are present if loading an older save
         const cleanDefault = JSON.parse(JSON.stringify(defaultGameState));
         return { ...cleanDefault, ...loadedState };
       } catch (error) {
@@ -117,8 +119,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     const gameTick = () => {
       setGameState(prev => {
-        const newState = { ...prev };
-        newState.resources = JSON.parse(JSON.stringify(prev.resources)); // Deep copy resources
+        const newState: GameState = JSON.parse(JSON.stringify(prev));
         const now = Date.now();
         const delta = (now - newState.lastUpdate) / 1000; 
 
@@ -145,7 +146,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     let droppedItemName = '';
 
     setGameState(prev => {
-      const newState: GameState = JSON.parse(JSON.stringify(prev)); // Deep copy entire state for this complex update
+      const newState: GameState = JSON.parse(JSON.stringify(prev));
       
       newState.totalClicks += 1;
 
@@ -250,7 +251,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return prev;
       }
 
-      const newState: GameState = JSON.parse(JSON.stringify(prev)); // Deep copy for safety
+      const newState: GameState = JSON.parse(JSON.stringify(prev)); 
 
       newState.resources[generator.costResource].amount -= totalCost;
       newState.generators[generatorId].quantity += numToBuy;
@@ -297,7 +298,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setGameState(prev => {
       const itemToEquip = getItem(itemId);
       if (!itemToEquip || !itemToEquip.equippable || (itemToEquip.slot && itemToEquip.slot !== slot && !(itemToEquip.group === "Ring" && (slot === "Ring1" || slot === "Ring2")) )) {
-        if(!(itemToEquip?.group === "Ring" && (slot === "Ring1" || slot === "Ring2") && itemToEquip.slot === "Ring")){
+        if(!(itemToEquip?.group === "Ring" && (slot === "Ring1" || slot === "Ring2") && (itemToEquip.slot === "Ring1" || itemToEquip.slot === "Ring2" || itemToEquip.slot === "Ring" ))){ // Adjusted to allow any "Ring" group item into "Ring1" or "Ring2"
              setTimeout(() => {
                 toast({ title: "Cannot Equip", description: "Item cannot be equipped in this slot.", variant: "destructive"});
              }, 0);
@@ -375,7 +376,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       for(let i=0; i < quantityToConsume; i++){
         if (itemToConsume.consumeEffect) {
-            const effectState = JSON.parse(JSON.stringify(tempState)); // Deep copy for effect function
+            const effectState = JSON.parse(JSON.stringify(tempState)); 
             const modifiedEffectState = itemToConsume.consumeEffect(effectState);
             tempState = modifiedEffectState;
         }
@@ -403,7 +404,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, 0);
       return;
     }
-    setGameState(prev => ({ ...JSON.parse(JSON.stringify(prev)), currentCharacterId: characterId, equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {}) })); 
+    setGameState(prev => ({ ...JSON.parse(JSON.stringify(prev)), currentCharacterId: characterId, equippedItems: CharacterSlots.reduce((acc, slot) => ({ ...acc, [slot]: null }), {} as GameState['equippedItems']) })); 
     setTimeout(() => { 
       toast({ title: "Character Switched", description: `Now playing as ${initialCharacters[characterId].name}.` });
     }, 0);
@@ -453,7 +454,9 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                      if (stat === 'globalPpsMultiplier' || stat === 'globalDropRateMultiplier') {
                         newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 1.0) + value; 
                      } else {
-                        newState.permanentBoosts[stat] = (newState.permanentBoosts[stat] || 0) + value;
+                        // For other potential permanent boosts, ensure they are initialized correctly.
+                        const currentBoostValue = typeof newState.permanentBoosts[stat] === 'number' ? newState.permanentBoosts[stat] : 0;
+                        newState.permanentBoosts[stat] = currentBoostValue + value;
                      }
                 }
             });
@@ -466,9 +469,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const saveGame = useCallback(() => {
     try {
-      const currentState = gameState; 
+      const currentState = JSON.parse(JSON.stringify(gameState)); 
       localStorage.setItem('chronoClickerSave', JSON.stringify(currentState));
-    } catch (error) {
+    } catch (error)
+      {
       console.error("Failed to save game:", error);
       setTimeout(() => toast({ title: "Auto-Save Failed", variant: "destructive" }), 0); 
     }
@@ -480,7 +484,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (savedGame) {
         const loadedState = JSON.parse(savedGame) as GameState;
         const cleanDefault = JSON.parse(JSON.stringify(defaultGameState)); 
-        setGameState({ ...cleanDefault, ...loadedState }); 
+        setGameState({ ...cleanDefault, ...loadedState, lastUpdate: Date.now() }); // Ensure lastUpdate is current on load
         setTimeout(() => toast({ title: "Game Loaded!" }), 0); 
         return true;
       }
@@ -515,7 +519,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const importedState = JSON.parse(jsonData) as GameState;
       if (importedState && typeof importedState.resources === 'object' && typeof importedState.generators === 'object') {
         const cleanDefault = JSON.parse(JSON.stringify(defaultGameState));
-        setGameState({ ...cleanDefault, ...importedState });
+        setGameState({ ...cleanDefault, ...importedState, lastUpdate: Date.now() }); // Ensure lastUpdate is current
         setTimeout(() => toast({ title: "Save Imported Successfully!" }), 0); 
         return true;
       } else {
