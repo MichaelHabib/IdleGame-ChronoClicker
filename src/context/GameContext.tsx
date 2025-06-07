@@ -9,7 +9,7 @@ import { initialGenerators } from '@/config/generators';
 import { initialItems } from '@/config/items';
 import { initialCharacters, defaultCharacterId } from '@/config/characters';
 import { initialAchievements } from '@/config/achievements';
-import { CharacterSlots } from '@/lib/types';
+import { CharacterSlots, ItemType, ArmourGroup, AccessoryGroup } from '@/lib/types';
 import { useToast } from "@/hooks/use-toast";
 
 // Add one of each equippable item by default to startingGear
@@ -211,7 +211,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         toast({ title: "Item Found!", description: `You found a ${droppedItemName}!` });
       }, 0);
     }
-  }, [getCharacter, getItem, toast, gameState.permanentBoosts.globalDropRateMultiplier, gameState.settings.currentMultiplier ]); // Added missing dependencies that were indirectly used or could affect logic flow.
+  }, [getCharacter, getItem, toast, gameState.permanentBoosts.globalDropRateMultiplier, gameState.generators ]);
 
 
   const buyGenerator = useCallback((generatorId: string) => {
@@ -230,7 +230,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       let totalCost = 0;
       let numToBuy = 0;
       
-      const tempStateForCostCalc = JSON.parse(JSON.stringify(prev)); // Use a clone for cost calculation
+      const tempStateForCostCalc = JSON.parse(JSON.stringify(prev)); 
 
       if (currentMultiplier === Number.MAX_SAFE_INTEGER) {
           let tempQuantity = tempStateForCostCalc.generators[generatorId].quantity;
@@ -268,11 +268,37 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       newState.resources[generator.costResource].amount -= totalCost;
       newState.generators[generatorId].quantity += numToBuy;
       
+      // New generic item drop logic based on total quantity
+      let genericItemDroppedThisPurchase = false;
+      let droppedGenericItemName = '';
+      const newTotalQuantity = newState.generators[generatorId].quantity;
+      const genericItemDropChance = Math.min(1, 0.01 * newTotalQuantity); // 1% * quantity, capped at 100%
+
+      if (Math.random() < genericItemDropChance) {
+        const allItemIds = Object.keys(initialItems);
+        if (allItemIds.length > 0) {
+          const randomItemId = allItemIds[Math.floor(Math.random() * allItemIds.length)];
+          const randomItemDetails = initialItems[randomItemId]; // getItem(randomItemId) could also be used
+
+          if (randomItemDetails) {
+            const existingItemIndex = newState.inventory.findIndex(invItem => invItem.itemId === randomItemId);
+            if (existingItemIndex > -1) {
+              newState.inventory[existingItemIndex].quantity += 1;
+            } else {
+              newState.inventory.push({ itemId: randomItemId, quantity: 1 });
+            }
+            droppedGenericItemName = randomItemDetails.name;
+            genericItemDroppedThisPurchase = true;
+          }
+        }
+      }
+      
+      // Existing artifact drop logic
       let artifactDropped = false;
       let droppedArtifactName = '';
       if (generator.artifactDropRateFormula && generator.artifactIds && generator.artifactIds.length > 0) {
         try {
-          const quantity = newState.generators[generatorId].quantity;
+          const quantity = newState.generators[generatorId].quantity; // Use newTotalQuantity here too for consistency
           const formulaString = generator.artifactDropRateFormula
             .replace(/\blog\b/gi, "Math.log") 
             .replace(/\bquantity\b/g, String(quantity));
@@ -298,6 +324,9 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       setTimeout(() => {
         toast({ title: "Generator Purchased!", description: `Bought ${numToBuy} x ${generator.name}` });
+        if (genericItemDroppedThisPurchase) {
+            toast({ title: "Bonus Item!", description: `Your ${generator.name} yielded a ${droppedGenericItemName}!` });
+        }
         if (artifactDropped) {
             toast({ title: "Artifact Found!", description: `Your ${generator.name} uncovered a ${droppedArtifactName}!` });
         }
@@ -316,11 +345,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
            return prev;
       }
       
-      // Check compatibility for the specific slot
       let isCompatible = false;
-      if (itemToEquip.slot === slot) { // Direct slot match
+      if (itemToEquip.slot === slot) { 
         isCompatible = true;
-      } else if (itemToEquip.group === AccessoryGroup.Ring && (slot === "Ring1" || slot === "Ring2")) { // Ring logic
+      } else if (itemToEquip.group === AccessoryGroup.Ring && (slot === "Ring1" || slot === "Ring2")) { 
         isCompatible = true;
       } else if (itemToEquip.type === ItemType.Armour) {
         if (itemToEquip.group === ArmourGroup.Helmet && slot === "Head") isCompatible = true;
@@ -353,9 +381,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       } else {
          console.warn(`Item ${itemId} to be equipped was not found in inventory for quantity decrement.`);
-         // If for some reason it's not in inventory, we can't equip. This path should ideally not be hit if UI is correct.
          setTimeout(() => { toast({ title: "Equip Error", description: "Item not found in inventory.", variant: "destructive"}); }, 0);
-         return prev; // Revert to previous state if item not found to remove
+         return prev; 
       }
       
       if (currentEquippedId) { 
@@ -445,7 +472,6 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setGameState(prev => {
       const newState = JSON.parse(JSON.stringify(prev));
       newState.currentCharacterId = characterId;
-      // When switching characters, unequip all items and return them to inventory
       Object.keys(newState.equippedItems).forEach(slotKey => {
         const slot = slotKey as CharacterSlotType;
         const itemId = newState.equippedItems[slot];
@@ -520,7 +546,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         achievementToastMessages.forEach(msg => setTimeout(() => toast(msg), 0)); 
     }
-  }, [gameState.totalClicks, gameState.resources, gameState.generators, gameState.unlockedAchievements, toast]); // Dependencies for achievements
+  }, [gameState.totalClicks, gameState.resources, gameState.generators, gameState.unlockedAchievements, toast]); 
 
   const saveGame = useCallback(() => {
     try {
@@ -548,7 +574,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setTimeout(() => toast({ title: "Load Failed", description: "Save data might be corrupted.", variant: "destructive" }), 0); 
     }
     return false;
-  }, [toast]); 
+  }, [toast, setGameState]); 
 
   const exportSave = useCallback(() => {
     try {
@@ -586,7 +612,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setTimeout(() => toast({ title: "Import Failed", description: "Could not parse save file.", variant: "destructive" }), 0); 
       return false;
     }
-  }, [toast]); 
+  }, [toast, setGameState]); 
 
   const resetGame = useCallback(() => {
     if(window.confirm("Are you sure you want to reset your game? All progress will be lost.")) {
@@ -594,10 +620,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       localStorage.removeItem('chronoClickerSave');
       setTimeout(() => toast({ title: "Game Reset", description: "Your progress has been reset." }), 0); 
     }
-  }, [toast]); 
+  }, [toast, setGameState]); 
   
   useEffect(() => {
-    const autoSaveInterval = setInterval(saveGame, 10000); // Auto-save every 10 seconds
+    const autoSaveInterval = setInterval(saveGame, 10000); 
     return () => clearInterval(autoSaveInterval);
   }, [saveGame]); 
 
