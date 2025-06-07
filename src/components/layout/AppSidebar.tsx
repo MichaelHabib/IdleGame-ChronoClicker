@@ -48,20 +48,18 @@ const AppSidebarComponent = () => {
           <SidebarMenu>
             {navItems.map((item) => (
               <SidebarMenuItem key={item.href}>
-                <Link href={item.href}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === item.href}
-                    tooltip={{children: item.label, side: "right"}}
-                    className="justify-start"
-                  >
-                    {/* Wrap the icon and span in a single element */}
-                    <span>
-                      <item.icon className="h-5 w-5" />
-                      <span className="group-data-[collapsible=icon]:hidden">{item.label}</span>
-                    </span>
-                  </SidebarMenuButton>
-                </Link>
+                <SidebarMenuButton
+                  asChild
+                  isActive={pathname === item.href}
+                  tooltip={{children: item.label, side: "right"}}
+                  className="justify-start"
+                >
+                  <Link href={item.href}>
+                    {/* The content of the Link, which will be styled by SidebarMenuButton */}
+                    <item.icon className="h-5 w-5" />
+                    <span className="group-data-[collapsible=icon]:hidden">{item.label}</span>
+                  </Link>
+                </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
           </SidebarMenu>
@@ -80,3 +78,4 @@ const AppSidebarComponent = () => {
 // Export the memoized component
 export const AppSidebar = React.memo(AppSidebarComponent);
 AppSidebar.displayName = 'AppSidebar'; // Optional: for better debugging
+
