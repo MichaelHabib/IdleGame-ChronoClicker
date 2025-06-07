@@ -5,7 +5,7 @@ const github_pages_url = 'https://michaelhabib.github.io/IdleGame-ChronoClicker/
 
 const nextConfig: NextConfig = {
   output: 'export', // Add this line to enable static export
-  assetPrefix: process.env.npm_lifecycle_event === 'build-github' ? github_pages_url : '',
+  assetPrefix: process.env.npm_lifecycle_event === 'build-github' ? 'https://michaelhabib.github.io/IdleGame-ChronoClicker/' : '',
   distDir: 'docs', // Change the output directory to 'docs'
   typescript: {
     ignoreBuildErrors: true,
